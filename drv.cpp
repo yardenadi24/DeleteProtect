@@ -1,48 +1,88 @@
 #include <ntifs.h>
 #include <fltKernel.h> // Need to add to the linker: fltmgr.lib
 
-NTSTATUS InitMiniFilter(PUNICODE_STRING RegistryPath);
+#pragma warning(disable: 4996)
 
-FLT_PREOP_CALLBACK_STATUS DelProtectPreCreate(
-	_Inout_ PFLT_CALLBACK_DATA Data,
-	_In_ PCFLT_RELATED_OBJECTS FltObjects,
-	PVOID* CompletionContext);
+#define DRIVER_TAG 'ledp'
 
-FLT_PREOP_CALLBACK_STATUS DelProtectPreSetInformation(
-	_Inout_ PFLT_CALLBACK_DATA Data,
-	_In_ PCFLT_RELATED_OBJECTS FltObjects,
-	PVOID* CompletionContext);
+#define PTDBG_TRACE_ROUTINES            0x00000001
+#define PTDBG_TRACE_OPERATION_STATUS    0x00000002
 
-NTSTATUS DelProtectUnload (FLT_FILTER_UNLOAD_FLAGS Flags);
+ULONG gTraceFlags = 0;
 
-NTSTATUS DelProtectInstanceQueryTeardown(
-	_In_ PCFLT_RELATED_OBJECTS FltObjects,
-	_In_ FLT_INSTANCE_QUERY_TEARDOWN_FLAGS Flags);
+#define PT_DBG_PRINT( _dbgLevel, _string )          \
+	(FlagOn(gTraceFlags,(_dbgLevel)) ?              \
+		DbgPrint _string :                          \
+		((int)0))
 
-VOID
-DelProtectInstanceTeardownStart(
-	_In_ PCFLT_RELATED_OBJECTS FltObjects,
-	_In_ FLT_INSTANCE_TEARDOWN_FLAGS Reason);
 
+// Prototypes
+
+//// Instance
 NTSTATUS
 DelProtectInstanceSetup(
 	_In_ PCFLT_RELATED_OBJECTS FltObjects,
 	_In_ FLT_INSTANCE_SETUP_FLAGS Flags,
 	_In_ DEVICE_TYPE VolumeDeviceType,
-	_In_ FLT_FILESYSTEM_TYPE VolumeFilesystemType);
+	_In_ FLT_FILESYSTEM_TYPE VolumeFilesystemType
+);
 
-VOID 
+NTSTATUS
+DelProtectUnload(
+	_In_ FLT_FILTER_UNLOAD_FLAGS Flags
+);
+
+VOID
+DelProtectInstanceTeardownStart(
+	_In_ PCFLT_RELATED_OBJECTS FltObjects,
+	_In_ FLT_INSTANCE_TEARDOWN_FLAGS Flags
+);
+
+VOID
 DelProtectInstanceTeardownComplete(
 	_In_ PCFLT_RELATED_OBJECTS FltObjects,
-	_In_ FLT_INSTANCE_TEARDOWN_FLAGS Reason);
+	_In_ FLT_INSTANCE_TEARDOWN_FLAGS Flags
+);
 
-extern "C"
 NTSTATUS
-ZwQueryInformationProcess(HANDLE hProcess, PROCESSINFOCLASS InfoClass, PVOID Buffer, ULONG Size, PULONG Needed);
+DelProtectInstanceQueryTeardown(
+	_In_ PCFLT_RELATED_OBJECTS FltObjects,
+	_In_ FLT_INSTANCE_QUERY_TEARDOWN_FLAGS Flags
+);
 
+// Prototypes
+
+
+// Callbacks
+
+FLT_PREOP_CALLBACK_STATUS DelProtectPreCreate(
+	_Inout_ PFLT_CALLBACK_DATA Data,
+	_In_ PCFLT_RELATED_OBJECTS FltObjects,
+	PVOID*);
+
+FLT_PREOP_CALLBACK_STATUS DelProtectPreSetInformation(
+	_Inout_ PFLT_CALLBACK_DATA Data,
+	_In_ PCFLT_RELATED_OBJECTS FltObjects,
+	_Flt_CompletionContext_Outptr_ PVOID* CompletionContext);
+
+
+
+// Callbacks
+
+NTSTATUS InitMiniFilter(PUNICODE_STRING RegistryPath);
+
+extern "C" NTSTATUS ZwQueryInformationProcess(
+	_In_      HANDLE           ProcessHandle,
+	_In_      PROCESSINFOCLASS ProcessInformationClass,
+	_Out_     PVOID            ProcessInformation,
+	_In_      ULONG            ProcessInformationLength,
+	_Out_opt_ PULONG           ReturnLength
+);
+
+BOOLEAN IsDeleteAllowed(const PEPROCESS Process);
 
 #define MAX_PATH 256
-PFLT_FILTER g_Filter;
+PFLT_FILTER gFilterHandle;
 
 extern "C"
 NTSTATUS
@@ -58,42 +98,312 @@ DriverEntry(
 		return Status;
 	}
 	
-	const FLT_OPERATION_REGISTRATION Callbacks[] = {
-		{ IRP_MJ_CREATE, 0, DelProtectPreCreate, NULL },
-		{ IRP_MJ_SET_INFORMATION, 0, DelProtectPreSetInformation, NULL },
+	CONST FLT_OPERATION_REGISTRATION Callbacks[] = {
+		{ IRP_MJ_CREATE, 0, DelProtectPreCreate, nullptr },
+		{ IRP_MJ_SET_INFORMATION, 0, DelProtectPreSetInformation, nullptr },
 		{ IRP_MJ_OPERATION_END }
 	};
 
-	const FLT_REGISTRATION Reg = {
+	CONST FLT_REGISTRATION FilterRegistration = {
+
 		sizeof(FLT_REGISTRATION),
 		FLT_REGISTRATION_VERSION,
-		0, // Flags
-		NULL, // Context
-		Callbacks, // Operation callbacks
-		DelProtectUnload, // MiniFilterUnload
-		DelProtectInstanceSetup, // InstanceSetup
-		DelProtectInstanceQueryTeardown, // InstanceQueryTeardown
-		DelProtectInstanceTeardownStart, // InstanceTeardownStart
-		DelProtectInstanceTeardownComplete, // InstanceTeardownComplete
+		0,                       //  Flags
+
+		nullptr,                 //  Context
+		Callbacks,               //  Operation callbacks
+
+		DelProtectUnload,                   //  MiniFilterUnload
+
+		DelProtectInstanceSetup,            //  InstanceSetup
+		DelProtectInstanceQueryTeardown,    //  InstanceQueryTeardown
+		DelProtectInstanceTeardownStart,    //  InstanceTeardownStart
+		DelProtectInstanceTeardownComplete, //  InstanceTeardownComplete
 	};
 
 
-	Status = FltRegisterFilter(DriverObject, &Reg, &g_Filter);
+	Status = FltRegisterFilter(DriverObject, &FilterRegistration, &gFilterHandle);
 	if (!NT_SUCCESS(Status))
 	{
 		DbgPrint("Failed to FltRegisterFilter 0x%u", Status);
 		return Status;
 	}
 
-	Status = FltStartFiltering(g_Filter);
+	Status = FltStartFiltering(gFilterHandle);
 	if (!NT_SUCCESS(Status))
 	{
 		DbgPrint("Failed to FltStartFiltering 0x%u", Status);
-		FltUnregisterFilter(g_Filter);
+		FltUnregisterFilter(gFilterHandle);
 		return Status;
 	}
 
 	return Status;
+}
+
+NTSTATUS
+DelProtectInstanceSetup(
+	_In_ PCFLT_RELATED_OBJECTS FltObjects,
+	_In_ FLT_INSTANCE_SETUP_FLAGS Flags,
+	_In_ DEVICE_TYPE VolumeDeviceType,
+	_In_ FLT_FILESYSTEM_TYPE VolumeFilesystemType
+)
+{
+	UNREFERENCED_PARAMETER(FltObjects);
+	UNREFERENCED_PARAMETER(Flags);
+	UNREFERENCED_PARAMETER(VolumeDeviceType);
+	UNREFERENCED_PARAMETER(VolumeFilesystemType);
+
+	PAGED_CODE();
+
+	PT_DBG_PRINT(PTDBG_TRACE_ROUTINES,
+		("DelProtect!DelProtectInstanceSetup: Entered\n"));
+
+	return STATUS_SUCCESS;
+}
+
+NTSTATUS
+DelProtectInstanceQueryTeardown(
+	_In_ PCFLT_RELATED_OBJECTS FltObjects,
+	_In_ FLT_INSTANCE_QUERY_TEARDOWN_FLAGS Flags
+)
+{
+	UNREFERENCED_PARAMETER(FltObjects);
+	UNREFERENCED_PARAMETER(Flags);
+
+	PAGED_CODE();
+
+	PT_DBG_PRINT(PTDBG_TRACE_ROUTINES,
+		("DelProtect!DelProtectInstanceQueryTeardown: Entered\n"));
+
+	return STATUS_SUCCESS;
+}
+
+VOID
+DelProtectInstanceTeardownStart(
+	_In_ PCFLT_RELATED_OBJECTS FltObjects,
+	_In_ FLT_INSTANCE_TEARDOWN_FLAGS Flags
+)
+{
+	UNREFERENCED_PARAMETER(FltObjects);
+	UNREFERENCED_PARAMETER(Flags);
+
+	PAGED_CODE();
+
+	PT_DBG_PRINT(PTDBG_TRACE_ROUTINES,
+		("DelProtect!DelProtectInstanceTeardownStart: Entered\n"));
+}
+
+VOID
+DelProtectInstanceTeardownComplete(
+	_In_ PCFLT_RELATED_OBJECTS FltObjects,
+	_In_ FLT_INSTANCE_TEARDOWN_FLAGS Flags
+)
+{
+	UNREFERENCED_PARAMETER(FltObjects);
+	UNREFERENCED_PARAMETER(Flags);
+
+	PAGED_CODE();
+
+	PT_DBG_PRINT(PTDBG_TRACE_ROUTINES,
+		("DelProtect!DelProtectInstanceTeardownComplete: Entered\n"));
+}
+
+NTSTATUS
+DelProtectUnload(
+	_In_ FLT_FILTER_UNLOAD_FLAGS Flags
+)
+{
+	UNREFERENCED_PARAMETER(Flags);
+
+	PAGED_CODE();
+
+	PT_DBG_PRINT(PTDBG_TRACE_ROUTINES,
+		("DelProtect!DelProtectUnload: Entered\n"));
+
+	FltUnregisterFilter(gFilterHandle);
+
+	return STATUS_SUCCESS;
+}
+
+FLT_PREOP_CALLBACK_STATUS
+DelProtectPreOperation(
+	_Inout_ PFLT_CALLBACK_DATA Data,
+	_In_ PCFLT_RELATED_OBJECTS FltObjects,
+	_Flt_CompletionContext_Outptr_ PVOID* CompletionContext
+)
+{
+
+	UNREFERENCED_PARAMETER(Data);
+	UNREFERENCED_PARAMETER(FltObjects);
+	UNREFERENCED_PARAMETER(CompletionContext);
+
+	PT_DBG_PRINT(PTDBG_TRACE_ROUTINES,
+		("DelProtect!DelProtectPreOperation: Entered\n"));
+
+	return FLT_PREOP_SUCCESS_WITH_CALLBACK;
+}
+
+
+VOID
+DelProtectOperationStatusCallback(
+	_In_ PCFLT_RELATED_OBJECTS FltObjects,
+	_In_ PFLT_IO_PARAMETER_BLOCK ParameterSnapshot,
+	_In_ NTSTATUS OperationStatus,
+	_In_ PVOID RequesterContext
+)
+{
+	UNREFERENCED_PARAMETER(FltObjects);
+
+	PT_DBG_PRINT(PTDBG_TRACE_ROUTINES,
+		("DelProtect!DelProtectOperationStatusCallback: Entered\n"));
+
+	PT_DBG_PRINT(PTDBG_TRACE_OPERATION_STATUS,
+		("DelProtect!DelProtectOperationStatusCallback: Status=%08x ctx=%p IrpMj=%02x.%02x \"%s\"\n",
+			OperationStatus,
+			RequesterContext,
+			ParameterSnapshot->MajorFunction,
+			ParameterSnapshot->MinorFunction,
+			FltGetIrpName(ParameterSnapshot->MajorFunction)));
+}
+
+FLT_POSTOP_CALLBACK_STATUS
+DelProtectPostOperation(
+	_Inout_ PFLT_CALLBACK_DATA Data,
+	_In_ PCFLT_RELATED_OBJECTS FltObjects,
+	_In_opt_ PVOID CompletionContext,
+	_In_ FLT_POST_OPERATION_FLAGS Flags
+)
+{
+	UNREFERENCED_PARAMETER(Data);
+	UNREFERENCED_PARAMETER(FltObjects);
+	UNREFERENCED_PARAMETER(CompletionContext);
+	UNREFERENCED_PARAMETER(Flags);
+
+	PT_DBG_PRINT(PTDBG_TRACE_ROUTINES,
+		("DelProtect!DelProtectPostOperation: Entered\n"));
+
+	return FLT_POSTOP_FINISHED_PROCESSING;
+}
+
+FLT_PREOP_CALLBACK_STATUS
+DelProtectPreOperationNoPostOperation(
+	_Inout_ PFLT_CALLBACK_DATA Data,
+	_In_ PCFLT_RELATED_OBJECTS FltObjects,
+	_Flt_CompletionContext_Outptr_ PVOID* CompletionContext
+)
+{
+	UNREFERENCED_PARAMETER(Data);
+	UNREFERENCED_PARAMETER(FltObjects);
+	UNREFERENCED_PARAMETER(CompletionContext);
+
+	PT_DBG_PRINT(PTDBG_TRACE_ROUTINES,
+		("DelProtect!DelProtectPreOperationNoPostOperation: Entered\n"));
+
+	// This template code does not do anything with the callbackData, but
+	// rather returns FLT_PREOP_SUCCESS_NO_CALLBACK.
+	// This passes the request down to the next miniFilter in the chain.
+
+	return FLT_PREOP_SUCCESS_NO_CALLBACK;
+}
+
+FLT_PREOP_CALLBACK_STATUS
+DelProtectPreCreate(
+	PFLT_CALLBACK_DATA Data,
+	PCFLT_RELATED_OBJECTS FltObjects,
+	PVOID*)
+{
+	UNREFERENCED_PARAMETER(FltObjects);
+
+	if (Data->RequestorMode == KernelMode)
+		return FLT_PREOP_SUCCESS_NO_CALLBACK;
+
+	auto& params = Data->Iopb->Parameters.Create;
+	auto returnStatus = FLT_PREOP_SUCCESS_NO_CALLBACK;
+
+	if (params.Options & FILE_DELETE_ON_CLOSE) {
+		// delete operation
+		KdPrint(("Delete on close: %wZ\n", &Data->Iopb->TargetFileObject->FileName));
+
+		if (!IsDeleteAllowed(PsGetCurrentProcess())) {
+			Data->IoStatus.Status = STATUS_ACCESS_DENIED;
+			returnStatus = FLT_PREOP_COMPLETE;
+			KdPrint(("Prevent delete from IRP_MJ_CREATE by cmd.exe\n"));
+		}
+	}
+	return returnStatus;
+}
+
+FLT_PREOP_CALLBACK_STATUS DelProtectPreSetInformation(
+	_Inout_ PFLT_CALLBACK_DATA Data,
+	_In_ PCFLT_RELATED_OBJECTS FltObjects,
+	_Flt_CompletionContext_Outptr_ PVOID* CompletionContext)
+{
+	UNREFERENCED_PARAMETER(FltObjects);
+	UNREFERENCED_PARAMETER(CompletionContext);
+	UNREFERENCED_PARAMETER(Data);
+
+	auto& params = Data->Iopb->Parameters.SetFileInformation;
+
+	if (params.FileInformationClass != FileDispositionInformation && params.FileInformationClass != FileDispositionInformationEx) {
+		// not a delete operation
+		return FLT_PREOP_SUCCESS_NO_CALLBACK;
+	}
+
+	auto info = (FILE_DISPOSITION_INFORMATION*)params.InfoBuffer;
+	if (!info->DeleteFile)
+		return FLT_PREOP_SUCCESS_NO_CALLBACK;
+
+	auto returnStatus = FLT_PREOP_SUCCESS_NO_CALLBACK;
+
+	// what process did this originate from?
+	auto process = PsGetThreadProcess(Data->Thread);
+	NT_ASSERT(process);
+
+	if (!IsDeleteAllowed(process)) {
+		Data->IoStatus.Status = STATUS_ACCESS_DENIED;
+		returnStatus = FLT_PREOP_COMPLETE;
+		KdPrint(("Prevent delete from IRP_MJ_SET_INFORMATION by cmd.exe\n"));
+	}
+
+	return returnStatus;
+}
+
+BOOLEAN
+IsDeleteAllowed(const PEPROCESS Process) {
+	bool currentProcess = PsGetCurrentProcess() == Process;
+	HANDLE hProcess;
+	if (currentProcess)
+		hProcess = NtCurrentProcess();
+	else {
+		auto status = ObOpenObjectByPointer(Process, OBJ_KERNEL_HANDLE,
+			nullptr, 0, nullptr, KernelMode, &hProcess);
+		if (!NT_SUCCESS(status))
+			return true;
+	}
+
+	auto size = 300;
+	bool allowDelete = true;
+	auto processName = (UNICODE_STRING*)ExAllocatePoolWithTag(PagedPool, size, DRIVER_TAG);
+
+	if (processName) {
+		RtlZeroMemory(processName, size);	// ensure string will be NULL-terminated
+		auto status = ZwQueryInformationProcess(hProcess, ProcessImageFileName,
+			processName, size - sizeof(WCHAR), nullptr);
+
+		if (NT_SUCCESS(status)) {
+			KdPrint(("Delete operation from %wZ\n", processName));
+
+			if (processName->Length > 0 && wcsstr(processName->Buffer, L"\\System32\\cmd.exe") != nullptr ||
+				wcsstr(processName->Buffer, L"\\SysWOW64\\cmd.exe") != nullptr) {
+				allowDelete = false;
+			}
+		}
+		ExFreePool(processName);
+	}
+	if (!currentProcess)
+		ZwClose(hProcess);
+
+	return allowDelete;
 }
 
 NTSTATUS
@@ -105,6 +415,7 @@ InitMiniFilter(PUNICODE_STRING RegistryPath)
 	HANDLE hInstKey = NULL;
 	do {
 		OBJECT_ATTRIBUTES keyAttr = RTL_CONSTANT_OBJECT_ATTRIBUTES(RegistryPath, OBJ_KERNEL_HANDLE);
+		KdPrint(("ZwOpenKey(&hKey, KEY_WRITE, &keyAttr)"));
 		Status = ZwOpenKey(&hKey, KEY_WRITE, &keyAttr);
 		if (!NT_SUCCESS(Status))
 		{
@@ -115,6 +426,7 @@ InitMiniFilter(PUNICODE_STRING RegistryPath)
 		UNICODE_STRING subKey = RTL_CONSTANT_STRING(L"Instances");
 		OBJECT_ATTRIBUTES subKeyAttr;
 		InitializeObjectAttributes(&subKeyAttr, &subKey, OBJ_KERNEL_HANDLE, hKey, nullptr);
+		KdPrint(("ZwCreateKey(&hSubKey, KEY_WRITE, &subKeyAttr, 0, nullptr, 0, nullptr);"));
 		Status = ZwCreateKey(&hSubKey, KEY_WRITE, &subKeyAttr, 0, nullptr, 0, nullptr);
 		if (!NT_SUCCESS(Status))
 		{
@@ -126,6 +438,7 @@ InitMiniFilter(PUNICODE_STRING RegistryPath)
 		//
 		UNICODE_STRING valueName = RTL_CONSTANT_STRING(L"DefaultInstance");
 		WCHAR name[] = L"DelProtectDefaultInstance"; // Just has to exists
+		KdPrint(("ZwSetValueKey(hSubKey, &valueName, 0, REG_SZ, name, sizeof(name));"));
 		Status = ZwSetValueKey(hSubKey, &valueName, 0, REG_SZ, name, sizeof(name));
 		if (!NT_SUCCESS(Status))
 		{
@@ -139,6 +452,7 @@ InitMiniFilter(PUNICODE_STRING RegistryPath)
 		UNICODE_STRING instKeyName;
 		RtlInitUnicodeString(&instKeyName, name);
 		InitializeObjectAttributes(&subKeyAttr, &instKeyName, OBJ_KERNEL_HANDLE, hSubKey, nullptr);
+		KdPrint(("ZwCreateKey(&hInstKey, KEY_WRITE, &subKeyAttr, 0, nullptr, 0, nullptr);"));
 		Status = ZwCreateKey(&hInstKey, KEY_WRITE, &subKeyAttr, 0, nullptr, 0, nullptr);
 		if (!NT_SUCCESS(Status))
 		{
@@ -151,6 +465,7 @@ InitMiniFilter(PUNICODE_STRING RegistryPath)
 		//
 		WCHAR altitude[] = L"35348.1234567";
 		UNICODE_STRING altitudeName = RTL_CONSTANT_STRING(L"Altitude");
+		KdPrint(("ZwSetValueKey(hInstKey, &altitudeName, 0, REG_SZ, altitude, sizeof(altitude));"));
 		Status = ZwSetValueKey(hInstKey, &altitudeName, 0, REG_SZ, altitude, sizeof(altitude));
 		if (!NT_SUCCESS(Status))
 		{
@@ -163,6 +478,7 @@ InitMiniFilter(PUNICODE_STRING RegistryPath)
 		//
 		UNICODE_STRING flagsName = RTL_CONSTANT_STRING(L"Flags");
 		ULONG flags = 0;
+		KdPrint(("ZwSetValueKey(hInstKey, &flagsName, 0, REG_DWORD, &flags, sizeof(flags));"));
 		Status = ZwSetValueKey(hInstKey, &flagsName, 0, REG_DWORD, &flags, sizeof(flags));
 		if (!NT_SUCCESS(Status))
 		{
@@ -171,115 +487,21 @@ InitMiniFilter(PUNICODE_STRING RegistryPath)
 		}
 	} while (false);
 	
-	if(hKey)
+	if (hKey)
+	{
+		KdPrint(("ZwClose(hKey);;"));
 		ZwClose(hKey);
+	}
 	if (hSubKey)
+	{
+		KdPrint(("ZwClose(hSubKey);;"));
 		ZwClose(hSubKey);
+	}
 	if (hInstKey)
+	{
+		KdPrint(("ZwClose(hInstKey);"));
 		ZwClose(hInstKey);
+	}
 
 	return Status;
-}
-
-NTSTATUS
-DelProtectUnload(FLT_FILTER_UNLOAD_FLAGS Flags)
-{
-	UNREFERENCED_PARAMETER(Flags);
-	FltUnregisterFilter(g_Filter);
-	return STATUS_SUCCESS;
-}
-
-NTSTATUS DelProtectInstanceQueryTeardown(
-	_In_ PCFLT_RELATED_OBJECTS FltObjects,
-	_In_ FLT_INSTANCE_QUERY_TEARDOWN_FLAGS Flags)
-{
-	UNREFERENCED_PARAMETER(FltObjects);
-	UNREFERENCED_PARAMETER(Flags);
-	return STATUS_SUCCESS;
-}
-
-VOID
-DelProtectInstanceTeardownStart(
-	_In_ PCFLT_RELATED_OBJECTS FltObjects,
-	_In_ FLT_INSTANCE_TEARDOWN_FLAGS Reason)
-{
-	UNREFERENCED_PARAMETER(FltObjects);
-	UNREFERENCED_PARAMETER(Reason);
-}
-
-VOID
-DelProtectInstanceTeardownComplete(
-	_In_ PCFLT_RELATED_OBJECTS FltObjects,
-	_In_ FLT_INSTANCE_TEARDOWN_FLAGS Reason)
-{
-	UNREFERENCED_PARAMETER(FltObjects);
-	UNREFERENCED_PARAMETER(Reason);
-}
-
-NTSTATUS
-DelProtectInstanceSetup(
-	_In_ PCFLT_RELATED_OBJECTS FltObjects,
-	_In_ FLT_INSTANCE_SETUP_FLAGS Flags,
-	_In_ DEVICE_TYPE VolumeDeviceType,
-	_In_ FLT_FILESYSTEM_TYPE VolumeFilesystemType)
-{
-	UNREFERENCED_PARAMETER(FltObjects);
-	UNREFERENCED_PARAMETER(Flags);
-	UNREFERENCED_PARAMETER(VolumeDeviceType);
-
-	if (VolumeFilesystemType != FLT_FSTYPE_NTFS)
-	{
-		return STATUS_FLT_DO_NOT_ATTACH;
-	}
-
-	return STATUS_SUCCESS;
-}
-
-FLT_PREOP_CALLBACK_STATUS DelProtectPreCreate(
-	_Inout_ PFLT_CALLBACK_DATA Data,
-	_In_ PCFLT_RELATED_OBJECTS FltObjects,
-	PVOID* CompletionContext)
-{
-	UNREFERENCED_PARAMETER(Data);
-	UNREFERENCED_PARAMETER(FltObjects);
-	UNREFERENCED_PARAMETER(CompletionContext);
-
-	// For delete purpose there are 2 ways to delete a file
-	// 1. Open a file with a flag indicating delete on close  (FILE_DELETE_ON_CLOSE)
-	//    which we will address here
-
-	if (Data->RequestorMode == KernelMode)
-		return FLT_PREOP_SUCCESS_NO_CALLBACK;
-
-	if (Data->Iopb->Parameters.Create.Options & FILE_DELETE_ON_CLOSE)
-	{
-		// Delete attempt
-		UCHAR Buffer[MAX_PATH];
-		NTSTATUS Status = ZwQueryInformationProcess(NtCurrentProcess(), ProcessImageFileName, Buffer, sizeof(Buffer), NULL);
-		if(NT_SUCCESS(Status))
-		{
-			PUNICODE_STRING Path = (PUNICODE_STRING)Buffer;
-			KdPrint(("Process image: %wZ\n", Path));
-			UNICODE_STRING Cmd = RTL_CONSTANT_STRING(L"\\System32\\cmd.exe");
-			if (RtlSuffixUnicodeString(&Cmd, Path, TRUE))
-			{
-				KdPrint(("File '%wZ' NOT deleted \n", FltObjects->FileObject->FileName));
-				Data->IoStatus.Status = STATUS_ACCESS_DENIED;
-				return FLT_PREOP_COMPLETE;
-			}
-		}
-	}
-
-	return FLT_PREOP_SUCCESS_NO_CALLBACK;
-}
-
-FLT_PREOP_CALLBACK_STATUS DelProtectPreSetInformation(
-	_Inout_ PFLT_CALLBACK_DATA Data,
-	_In_ PCFLT_RELATED_OBJECTS FltObjects,
-	PVOID* CompletionContext)
-{
-	UNREFERENCED_PARAMETER(Data);
-	UNREFERENCED_PARAMETER(FltObjects);
-	UNREFERENCED_PARAMETER(CompletionContext);
-	return FLT_PREOP_SUCCESS_NO_CALLBACK;
 }
