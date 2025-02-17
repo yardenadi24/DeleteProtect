@@ -4,21 +4,21 @@
 #pragma warning(disable: 4996)
 
 #define DRIVER_TAG 'ledp'
-
+#define DRIVER_PREFIX 'DelProtect: '
 #define PTDBG_TRACE_ROUTINES            0x00000001
 #define PTDBG_TRACE_OPERATION_STATUS    0x00000002
 
 ULONG gTraceFlags = 0;
 
-#define PT_DBG_PRINT( _dbgLevel, _string )          \
-	(FlagOn(gTraceFlags,(_dbgLevel)) ?              \
-		DbgPrint _string :                          \
-		((int)0))
+#define PT_DBG_PRINT( _dbgLevel, _string )           \
+    (FlagOn(gTraceFlags,(_dbgLevel)) ?                 \
+        DbgPrint _string :  \
+        ((int)0))
 
 
-// Prototypes
 
-//// Instance
+// ------------------ Prototypes ------------------ //
+
 NTSTATUS
 DelProtectInstanceSetup(
 	_In_ PCFLT_RELATED_OBJECTS FltObjects,
@@ -50,11 +50,12 @@ DelProtectInstanceQueryTeardown(
 	_In_ FLT_INSTANCE_QUERY_TEARDOWN_FLAGS Flags
 );
 
-// Prototypes
+// ------------------ Prototypes ------------------ //
 
 
-// Callbacks
 
+
+// ------------------ Callbacks ------------------ //
 FLT_PREOP_CALLBACK_STATUS DelProtectPreCreate(
 	_Inout_ PFLT_CALLBACK_DATA Data,
 	_In_ PCFLT_RELATED_OBJECTS FltObjects,
@@ -64,13 +65,11 @@ FLT_PREOP_CALLBACK_STATUS DelProtectPreSetInformation(
 	_Inout_ PFLT_CALLBACK_DATA Data,
 	_In_ PCFLT_RELATED_OBJECTS FltObjects,
 	_Flt_CompletionContext_Outptr_ PVOID* CompletionContext);
+// ------------------ Callbacks ------------------ //
 
 
 
-// Callbacks
-
-NTSTATUS InitMiniFilter(PUNICODE_STRING RegistryPath);
-
+BOOLEAN IsDeleteAllowed(const PEPROCESS Process);
 extern "C" NTSTATUS ZwQueryInformationProcess(
 	_In_      HANDLE           ProcessHandle,
 	_In_      PROCESSINFOCLASS ProcessInformationClass,
@@ -78,11 +77,9 @@ extern "C" NTSTATUS ZwQueryInformationProcess(
 	_In_      ULONG            ProcessInformationLength,
 	_Out_opt_ PULONG           ReturnLength
 );
+NTSTATUS InitMiniFilter(PUNICODE_STRING RegistryPath);
 
-BOOLEAN IsDeleteAllowed(const PEPROCESS Process);
-
-#define MAX_PATH 256
-PFLT_FILTER gFilterHandle;
+PFLT_FILTER g_FilterHandle;
 
 extern "C"
 NTSTATUS
@@ -122,18 +119,22 @@ DriverEntry(
 	};
 
 
-	Status = FltRegisterFilter(DriverObject, &FilterRegistration, &gFilterHandle);
+	Status = FltRegisterFilter(DriverObject, &FilterRegistration, &g_FilterHandle);
 	if (!NT_SUCCESS(Status))
 	{
 		DbgPrint("Failed to FltRegisterFilter 0x%u", Status);
 		return Status;
 	}
 
-	Status = FltStartFiltering(gFilterHandle);
+	gTraceFlags |= PTDBG_TRACE_ROUTINES;
+	gTraceFlags |= PTDBG_TRACE_OPERATION_STATUS;
+
+
+	Status = FltStartFiltering(g_FilterHandle);
 	if (!NT_SUCCESS(Status))
 	{
 		DbgPrint("Failed to FltStartFiltering 0x%u", Status);
-		FltUnregisterFilter(gFilterHandle);
+		FltUnregisterFilter(g_FilterHandle);
 		return Status;
 	}
 
@@ -220,7 +221,7 @@ DelProtectUnload(
 	PT_DBG_PRINT(PTDBG_TRACE_ROUTINES,
 		("DelProtect!DelProtectUnload: Entered\n"));
 
-	FltUnregisterFilter(gFilterHandle);
+	FltUnregisterFilter(g_FilterHandle);
 
 	return STATUS_SUCCESS;
 }
@@ -306,10 +307,9 @@ DelProtectPreOperationNoPostOperation(
 	return FLT_PREOP_SUCCESS_NO_CALLBACK;
 }
 
-FLT_PREOP_CALLBACK_STATUS
-DelProtectPreCreate(
-	PFLT_CALLBACK_DATA Data,
-	PCFLT_RELATED_OBJECTS FltObjects,
+FLT_PREOP_CALLBACK_STATUS DelProtectPreCreate(
+	_Inout_ PFLT_CALLBACK_DATA Data,
+	_In_ PCFLT_RELATED_OBJECTS FltObjects,
 	PVOID*)
 {
 	UNREFERENCED_PARAMETER(FltObjects);
