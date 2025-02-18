@@ -1,85 +1,4 @@
-#include <ntifs.h>
-#include <fltKernel.h> // Need to add to the linker: fltmgr.lib
-
-#pragma warning(disable: 4996)
-
-#define DRIVER_TAG 'ledp'
-#define DRIVER_PREFIX 'DelProtect: '
-#define PTDBG_TRACE_ROUTINES            0x00000001
-#define PTDBG_TRACE_OPERATION_STATUS    0x00000002
-
-ULONG gTraceFlags = 0;
-
-#define PT_DBG_PRINT( _dbgLevel, _string )           \
-    (FlagOn(gTraceFlags,(_dbgLevel)) ?                 \
-        DbgPrint _string :  \
-        ((int)0))
-
-
-
-// ------------------ Prototypes ------------------ //
-
-NTSTATUS
-DelProtectInstanceSetup(
-	_In_ PCFLT_RELATED_OBJECTS FltObjects,
-	_In_ FLT_INSTANCE_SETUP_FLAGS Flags,
-	_In_ DEVICE_TYPE VolumeDeviceType,
-	_In_ FLT_FILESYSTEM_TYPE VolumeFilesystemType
-);
-
-NTSTATUS
-DelProtectUnload(
-	_In_ FLT_FILTER_UNLOAD_FLAGS Flags
-);
-
-VOID
-DelProtectInstanceTeardownStart(
-	_In_ PCFLT_RELATED_OBJECTS FltObjects,
-	_In_ FLT_INSTANCE_TEARDOWN_FLAGS Flags
-);
-
-VOID
-DelProtectInstanceTeardownComplete(
-	_In_ PCFLT_RELATED_OBJECTS FltObjects,
-	_In_ FLT_INSTANCE_TEARDOWN_FLAGS Flags
-);
-
-NTSTATUS
-DelProtectInstanceQueryTeardown(
-	_In_ PCFLT_RELATED_OBJECTS FltObjects,
-	_In_ FLT_INSTANCE_QUERY_TEARDOWN_FLAGS Flags
-);
-
-// ------------------ Prototypes ------------------ //
-
-
-
-
-// ------------------ Callbacks ------------------ //
-FLT_PREOP_CALLBACK_STATUS DelProtectPreCreate(
-	_Inout_ PFLT_CALLBACK_DATA Data,
-	_In_ PCFLT_RELATED_OBJECTS FltObjects,
-	PVOID*);
-
-FLT_PREOP_CALLBACK_STATUS DelProtectPreSetInformation(
-	_Inout_ PFLT_CALLBACK_DATA Data,
-	_In_ PCFLT_RELATED_OBJECTS FltObjects,
-	_Flt_CompletionContext_Outptr_ PVOID* CompletionContext);
-// ------------------ Callbacks ------------------ //
-
-
-
-BOOLEAN IsDeleteAllowed(const PEPROCESS Process);
-extern "C" NTSTATUS ZwQueryInformationProcess(
-	_In_      HANDLE           ProcessHandle,
-	_In_      PROCESSINFOCLASS ProcessInformationClass,
-	_Out_     PVOID            ProcessInformation,
-	_In_      ULONG            ProcessInformationLength,
-	_Out_opt_ PULONG           ReturnLength
-);
-NTSTATUS InitMiniFilter(PUNICODE_STRING RegistryPath);
-
-PFLT_FILTER g_FilterHandle;
+#include "drv.h"
 
 extern "C"
 NTSTATUS
@@ -88,19 +7,22 @@ DriverEntry(
 	PUNICODE_STRING RegistryPath
 )
 {
+	// Initialize the registry for the fs minifilter
 	NTSTATUS Status = InitMiniFilter(RegistryPath);
 	if (!NT_SUCCESS(Status))
 	{
-		DbgPrint("Failed to InitMiniFilter 0x%u", Status);
+		LOG("Failed to InitMiniFilter 0x%u", Status);
 		return Status;
 	}
 	
+	// Callbacks
 	CONST FLT_OPERATION_REGISTRATION Callbacks[] = {
 		{ IRP_MJ_CREATE, 0, DelProtectPreCreate, nullptr },
 		{ IRP_MJ_SET_INFORMATION, 0, DelProtectPreSetInformation, nullptr },
 		{ IRP_MJ_OPERATION_END }
 	};
 
+	// Registration structure
 	CONST FLT_REGISTRATION FilterRegistration = {
 
 		sizeof(FLT_REGISTRATION),
@@ -118,22 +40,20 @@ DriverEntry(
 		DelProtectInstanceTeardownComplete, //  InstanceTeardownComplete
 	};
 
-
+	// Register fs minifilter
 	Status = FltRegisterFilter(DriverObject, &FilterRegistration, &g_FilterHandle);
 	if (!NT_SUCCESS(Status))
 	{
-		DbgPrint("Failed to FltRegisterFilter 0x%u", Status);
+		LOG("Failed to FltRegisterFilter 0x%u", Status);
 		return Status;
 	}
 
-	gTraceFlags |= PTDBG_TRACE_ROUTINES;
-	gTraceFlags |= PTDBG_TRACE_OPERATION_STATUS;
-
-
+	// Start filter
 	Status = FltStartFiltering(g_FilterHandle);
 	if (!NT_SUCCESS(Status))
 	{
-		DbgPrint("Failed to FltStartFiltering 0x%u", Status);
+		LOG("Failed to FltStartFiltering 0x%u", Status);
+		// When failed, unregister filter
 		FltUnregisterFilter(g_FilterHandle);
 		return Status;
 	}
@@ -156,8 +76,7 @@ DelProtectInstanceSetup(
 
 	PAGED_CODE();
 
-	PT_DBG_PRINT(PTDBG_TRACE_ROUTINES,
-		("DelProtect!DelProtectInstanceSetup: Entered\n"));
+	LOG("Entered");
 
 	return STATUS_SUCCESS;
 }
@@ -173,8 +92,7 @@ DelProtectInstanceQueryTeardown(
 
 	PAGED_CODE();
 
-	PT_DBG_PRINT(PTDBG_TRACE_ROUTINES,
-		("DelProtect!DelProtectInstanceQueryTeardown: Entered\n"));
+	LOG("Entered");
 
 	return STATUS_SUCCESS;
 }
@@ -190,8 +108,7 @@ DelProtectInstanceTeardownStart(
 
 	PAGED_CODE();
 
-	PT_DBG_PRINT(PTDBG_TRACE_ROUTINES,
-		("DelProtect!DelProtectInstanceTeardownStart: Entered\n"));
+	LOG("Entered");
 }
 
 VOID
@@ -205,8 +122,7 @@ DelProtectInstanceTeardownComplete(
 
 	PAGED_CODE();
 
-	PT_DBG_PRINT(PTDBG_TRACE_ROUTINES,
-		("DelProtect!DelProtectInstanceTeardownComplete: Entered\n"));
+	LOG("Entered");
 }
 
 NTSTATUS
@@ -218,8 +134,7 @@ DelProtectUnload(
 
 	PAGED_CODE();
 
-	PT_DBG_PRINT(PTDBG_TRACE_ROUTINES,
-		("DelProtect!DelProtectUnload: Entered\n"));
+	LOG("Entered");
 
 	FltUnregisterFilter(g_FilterHandle);
 
@@ -238,8 +153,7 @@ DelProtectPreOperation(
 	UNREFERENCED_PARAMETER(FltObjects);
 	UNREFERENCED_PARAMETER(CompletionContext);
 
-	PT_DBG_PRINT(PTDBG_TRACE_ROUTINES,
-		("DelProtect!DelProtectPreOperation: Entered\n"));
+	LOG("Entered");
 
 	return FLT_PREOP_SUCCESS_WITH_CALLBACK;
 }
@@ -255,16 +169,12 @@ DelProtectOperationStatusCallback(
 {
 	UNREFERENCED_PARAMETER(FltObjects);
 
-	PT_DBG_PRINT(PTDBG_TRACE_ROUTINES,
-		("DelProtect!DelProtectOperationStatusCallback: Entered\n"));
-
-	PT_DBG_PRINT(PTDBG_TRACE_OPERATION_STATUS,
-		("DelProtect!DelProtectOperationStatusCallback: Status=%08x ctx=%p IrpMj=%02x.%02x \"%s\"\n",
+	LOG("Entered, Status=%08x ctx=%p IrpMj=%02x.%02x \"%s\"\n",
 			OperationStatus,
 			RequesterContext,
 			ParameterSnapshot->MajorFunction,
 			ParameterSnapshot->MinorFunction,
-			FltGetIrpName(ParameterSnapshot->MajorFunction)));
+			FltGetIrpName(ParameterSnapshot->MajorFunction));
 }
 
 FLT_POSTOP_CALLBACK_STATUS
@@ -280,8 +190,7 @@ DelProtectPostOperation(
 	UNREFERENCED_PARAMETER(CompletionContext);
 	UNREFERENCED_PARAMETER(Flags);
 
-	PT_DBG_PRINT(PTDBG_TRACE_ROUTINES,
-		("DelProtect!DelProtectPostOperation: Entered\n"));
+	LOG("Entered");
 
 	return FLT_POSTOP_FINISHED_PROCESSING;
 }
@@ -297,8 +206,7 @@ DelProtectPreOperationNoPostOperation(
 	UNREFERENCED_PARAMETER(FltObjects);
 	UNREFERENCED_PARAMETER(CompletionContext);
 
-	PT_DBG_PRINT(PTDBG_TRACE_ROUTINES,
-		("DelProtect!DelProtectPreOperationNoPostOperation: Entered\n"));
+	LOG("Entered");
 
 	// This template code does not do anything with the callbackData, but
 	// rather returns FLT_PREOP_SUCCESS_NO_CALLBACK.
@@ -322,12 +230,12 @@ FLT_PREOP_CALLBACK_STATUS DelProtectPreCreate(
 
 	if (params.Options & FILE_DELETE_ON_CLOSE) {
 		// delete operation
-		KdPrint(("Delete on close: %wZ\n", &Data->Iopb->TargetFileObject->FileName));
+		LOG("Delete on close: %wZ", &Data->Iopb->TargetFileObject->FileName);
 
 		if (!IsDeleteAllowed(PsGetCurrentProcess())) {
 			Data->IoStatus.Status = STATUS_ACCESS_DENIED;
 			returnStatus = FLT_PREOP_COMPLETE;
-			KdPrint(("Prevent delete from IRP_MJ_CREATE by cmd.exe\n"));
+			LOG("Prevent delete from IRP_MJ_CREATE by cmd.exe");
 		}
 	}
 	return returnStatus;
@@ -362,7 +270,7 @@ FLT_PREOP_CALLBACK_STATUS DelProtectPreSetInformation(
 	if (!IsDeleteAllowed(process)) {
 		Data->IoStatus.Status = STATUS_ACCESS_DENIED;
 		returnStatus = FLT_PREOP_COMPLETE;
-		KdPrint(("Prevent delete from IRP_MJ_SET_INFORMATION by cmd.exe\n"));
+		LOG("Prevent delete from IRP_MJ_SET_INFORMATION by cmd.exe");
 	}
 
 	return returnStatus;
@@ -391,7 +299,7 @@ IsDeleteAllowed(const PEPROCESS Process) {
 			processName, size - sizeof(WCHAR), nullptr);
 
 		if (NT_SUCCESS(status)) {
-			KdPrint(("Delete operation from %wZ\n", processName));
+			LOG("Delete operation from %wZ", processName);
 
 			if (processName->Length > 0 && wcsstr(processName->Buffer, L"\\System32\\cmd.exe") != nullptr ||
 				wcsstr(processName->Buffer, L"\\SysWOW64\\cmd.exe") != nullptr) {
@@ -415,7 +323,7 @@ InitMiniFilter(PUNICODE_STRING RegistryPath)
 	HANDLE hInstKey = NULL;
 	do {
 		OBJECT_ATTRIBUTES keyAttr = RTL_CONSTANT_OBJECT_ATTRIBUTES(RegistryPath, OBJ_KERNEL_HANDLE);
-		KdPrint(("ZwOpenKey(&hKey, KEY_WRITE, &keyAttr)"));
+		LOG("ZwOpenKey(&hKey, KEY_WRITE, &keyAttr)");
 		Status = ZwOpenKey(&hKey, KEY_WRITE, &keyAttr);
 		if (!NT_SUCCESS(Status))
 		{
@@ -426,11 +334,11 @@ InitMiniFilter(PUNICODE_STRING RegistryPath)
 		UNICODE_STRING subKey = RTL_CONSTANT_STRING(L"Instances");
 		OBJECT_ATTRIBUTES subKeyAttr;
 		InitializeObjectAttributes(&subKeyAttr, &subKey, OBJ_KERNEL_HANDLE, hKey, nullptr);
-		KdPrint(("ZwCreateKey(&hSubKey, KEY_WRITE, &subKeyAttr, 0, nullptr, 0, nullptr);"));
+		LOG("ZwCreateKey(&hSubKey, KEY_WRITE, &subKeyAttr, 0, nullptr, 0, nullptr);");
 		Status = ZwCreateKey(&hSubKey, KEY_WRITE, &subKeyAttr, 0, nullptr, 0, nullptr);
 		if (!NT_SUCCESS(Status))
 		{
-			DbgPrint("Failed to ZwCreateKey 0x%u", Status);
+			LOG("Failed to ZwCreateKey 0x%u", Status);
 			break;
 		}
 		//
@@ -438,7 +346,7 @@ InitMiniFilter(PUNICODE_STRING RegistryPath)
 		//
 		UNICODE_STRING valueName = RTL_CONSTANT_STRING(L"DefaultInstance");
 		WCHAR name[] = L"DelProtectDefaultInstance"; // Just has to exists
-		KdPrint(("ZwSetValueKey(hSubKey, &valueName, 0, REG_SZ, name, sizeof(name));"));
+		LOG("ZwSetValueKey(hSubKey, &valueName, 0, REG_SZ, name, sizeof(name));");
 		Status = ZwSetValueKey(hSubKey, &valueName, 0, REG_SZ, name, sizeof(name));
 		if (!NT_SUCCESS(Status))
 		{
@@ -452,11 +360,11 @@ InitMiniFilter(PUNICODE_STRING RegistryPath)
 		UNICODE_STRING instKeyName;
 		RtlInitUnicodeString(&instKeyName, name);
 		InitializeObjectAttributes(&subKeyAttr, &instKeyName, OBJ_KERNEL_HANDLE, hSubKey, nullptr);
-		KdPrint(("ZwCreateKey(&hInstKey, KEY_WRITE, &subKeyAttr, 0, nullptr, 0, nullptr);"));
+		LOG("ZwCreateKey(&hInstKey, KEY_WRITE, &subKeyAttr, 0, nullptr, 0, nullptr);");
 		Status = ZwCreateKey(&hInstKey, KEY_WRITE, &subKeyAttr, 0, nullptr, 0, nullptr);
 		if (!NT_SUCCESS(Status))
 		{
-			DbgPrint("Failed to ZwCreateKey 0x%u", Status);
+			LOG("Failed to ZwCreateKey 0x%u", Status);
 			break;
 		}
 
@@ -465,11 +373,11 @@ InitMiniFilter(PUNICODE_STRING RegistryPath)
 		//
 		WCHAR altitude[] = L"35348.1234567";
 		UNICODE_STRING altitudeName = RTL_CONSTANT_STRING(L"Altitude");
-		KdPrint(("ZwSetValueKey(hInstKey, &altitudeName, 0, REG_SZ, altitude, sizeof(altitude));"));
+		LOG("ZwSetValueKey(hInstKey, &altitudeName, 0, REG_SZ, altitude, sizeof(altitude));");
 		Status = ZwSetValueKey(hInstKey, &altitudeName, 0, REG_SZ, altitude, sizeof(altitude));
 		if (!NT_SUCCESS(Status))
 		{
-			DbgPrint("Failed to ZwSetValueKey 0x%u", Status);
+			LOG("Failed to ZwSetValueKey 0x%u", Status);
 			break;
 		}
 		
@@ -478,28 +386,28 @@ InitMiniFilter(PUNICODE_STRING RegistryPath)
 		//
 		UNICODE_STRING flagsName = RTL_CONSTANT_STRING(L"Flags");
 		ULONG flags = 0;
-		KdPrint(("ZwSetValueKey(hInstKey, &flagsName, 0, REG_DWORD, &flags, sizeof(flags));"));
+		LOG("ZwSetValueKey(hInstKey, &flagsName, 0, REG_DWORD, &flags, sizeof(flags));");
 		Status = ZwSetValueKey(hInstKey, &flagsName, 0, REG_DWORD, &flags, sizeof(flags));
 		if (!NT_SUCCESS(Status))
 		{
-			DbgPrint("Failed to ZwSetValueKey 0x%u", Status);
+			LOG("Failed to ZwSetValueKey 0x%u", Status);
 			break;
 		}
 	} while (false);
 	
 	if (hKey)
 	{
-		KdPrint(("ZwClose(hKey);;"));
+		LOG("ZwClose(hKey)");
 		ZwClose(hKey);
 	}
 	if (hSubKey)
 	{
-		KdPrint(("ZwClose(hSubKey);;"));
+		LOG("ZwClose(hSubKey)");
 		ZwClose(hSubKey);
 	}
 	if (hInstKey)
 	{
-		KdPrint(("ZwClose(hInstKey);"));
+		LOG("ZwClose(hInstKey)");
 		ZwClose(hInstKey);
 	}
 
